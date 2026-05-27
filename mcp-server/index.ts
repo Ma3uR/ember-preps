@@ -14,12 +14,12 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { closeReadonlyPool } from "../lib/supabase.js";
+import { closeReadonlyPool } from "../lib/supabase";
 import {
   registerDescribeTable,
   registerExecuteQuery,
   registerListTables,
-} from "./tools.js";
+} from "./tools";
 
 process.on("uncaughtException", (err) => {
   console.error("[mcp-server] uncaughtException:", err);

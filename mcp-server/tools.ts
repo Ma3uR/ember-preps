@@ -12,7 +12,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runReadonlyQuery, runSql } from "../lib/supabase.js";
+import { runReadonlyQuery, runSql } from "../lib/supabase";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
