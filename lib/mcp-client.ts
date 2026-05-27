@@ -70,8 +70,17 @@ function wireShutdown() {
 
 export async function getMcpClient(): Promise<Client> {
   if (!globalThis.__mcp) {
-    globalThis.__mcp = spawnMcp();
+    const pending = spawnMcp();
+    globalThis.__mcp = pending;
     wireShutdown();
+    // If the child fails to spawn or connect, clear the cached promise so the
+    // next request retries instead of returning the same rejection forever
+    // (the plan's "child killed mid-request → next request respawns" path).
+    pending.catch(() => {
+      if (globalThis.__mcp === pending) {
+        globalThis.__mcp = undefined;
+      }
+    });
   }
   return (await globalThis.__mcp).client;
 }

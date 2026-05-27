@@ -39,7 +39,10 @@ function getReadonlyPool(): Pool {
       connectionString: url,
       max: 4,
       idleTimeoutMillis: 30_000,
-      ssl: { rejectUnauthorized: false },
+      // Supabase requires TLS; verify the certificate chain against Node's
+      // bundled CAs. Don't downgrade to `rejectUnauthorized: false` — the
+      // llm_readonly password traverses this socket every connect.
+      ssl: { rejectUnauthorized: true },
     });
   }
   return globalThis.__llmReadonlyPool;
