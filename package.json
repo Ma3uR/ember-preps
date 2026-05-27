@@ -7,8 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "mcp-server": "tsx mcp-server/index.ts",
-    "mcp-inspector": "npx @modelcontextprotocol/inspector tsx mcp-server/index.ts"
+    "mcp-server": "tsx --env-file=.env.local mcp-server/index.ts",
+    "mcp-inspector": "npx @modelcontextprotocol/inspector tsx --env-file=.env.local mcp-server/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

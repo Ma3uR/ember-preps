@@ -16,7 +16,7 @@
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { Pool, type PoolClient } from "pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 // ---------------------------------------------------------------------------
 // LLM-readonly pg pool (singleton, HMR-safe).
@@ -71,6 +71,39 @@ export async function runSql<T = Record<string, unknown>>(
     return res.rows[0]?.run_sql ?? [];
   } finally {
     client?.release();
+  }
+}
+
+/**
+ * Parametrized SELECT as `llm_readonly`, bypassing `run_sql`. Used by the
+ * schema-introspection tools (`list_tables`, `describe_table`) where the SQL
+ * is hardcoded and only a typed parameter varies. Role-level grant still
+ * applies — the role only has `pg_read_all_data`, so writes are rejected
+ * even if a future caller passes an INSERT here.
+ */
+export async function runReadonlyQuery<T extends QueryResultRow = QueryResultRow>(
+  sql: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const pool = getReadonlyPool();
+  let client: PoolClient | null = null;
+  try {
+    client = await pool.connect();
+    const res = await client.query<T>(sql, params);
+    return res.rows;
+  } finally {
+    client?.release();
+  }
+}
+
+/**
+ * Drain the pool. Call from a graceful-shutdown hook so process exit doesn't
+ * leave dangling Postgres sessions.
+ */
+export async function closeReadonlyPool(): Promise<void> {
+  if (globalThis.__llmReadonlyPool) {
+    await globalThis.__llmReadonlyPool.end();
+    globalThis.__llmReadonlyPool = undefined;
   }
 }
 
