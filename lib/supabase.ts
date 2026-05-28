@@ -27,6 +27,15 @@ declare global {
   var __llmReadonlyPool: Pool | undefined;
 }
 
+function isLocalHost(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return ["localhost", "127.0.0.1", "0.0.0.0"].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 function getReadonlyPool(): Pool {
   const url = process.env.SUPABASE_LLM_READONLY_DB_URL;
   if (!url) {
@@ -35,14 +44,16 @@ function getReadonlyPool(): Pool {
     );
   }
   if (!globalThis.__llmReadonlyPool) {
+    // `supabase start` runs Postgres on 127.0.0.1 without TLS, so attempting
+    // verified TLS against it would fail immediately. Cloud Supabase is the
+    // opposite — TLS is required, and certificate verification protects the
+    // llm_readonly password as it traverses the wire.
+    const ssl = isLocalHost(url) ? false : { rejectUnauthorized: true };
     globalThis.__llmReadonlyPool = new Pool({
       connectionString: url,
       max: 4,
       idleTimeoutMillis: 30_000,
-      // Supabase requires TLS; verify the certificate chain against Node's
-      // bundled CAs. Don't downgrade to `rejectUnauthorized: false` — the
-      // llm_readonly password traverses this socket every connect.
-      ssl: { rejectUnauthorized: true },
+      ssl,
     });
   }
   return globalThis.__llmReadonlyPool;
