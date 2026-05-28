@@ -26,7 +26,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 import { getMcpClient } from "./mcp-client";
 
-const MODEL = "claude-sonnet-4-6-20250929";
+const MODEL = "claude-sonnet-4-6";
 const MAX_ITERATIONS = 6;
 const MAX_TOKENS = 1024;
 
