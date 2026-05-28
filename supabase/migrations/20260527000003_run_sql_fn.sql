@@ -31,7 +31,13 @@ as $$
 declare
   result jsonb;
 begin
-  if query !~* '^\s*select\b' then
+  -- Postgres POSIX regex: `\b` is the BACKSPACE character (ASCII 8), NOT
+  -- a word boundary — the word-boundary escape is `\y`. `\b` is the Perl/
+  -- JS convention. Using `\b` here makes the check never match a real
+  -- SQL string, so every query gets rejected as "Only SELECT statements
+  -- are allowed." even when it starts with SELECT. Be careful when
+  -- porting regexes from sqlglot, python, or javascript guides.
+  if query !~* '^\s*select\y' then
     raise exception 'Only SELECT statements are allowed.';
   end if;
 
