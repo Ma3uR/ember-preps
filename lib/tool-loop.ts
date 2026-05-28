@@ -138,6 +138,9 @@ export async function runMcpToolLoop(question: string): Promise<string> {
                 .map((b) => b.text)
                 .join("\n")
             : "";
+          if (result.isError) {
+            console.error(`[tool-loop]   tool error: ${text}`);
+          }
           return {
             type: "tool_result" as const,
             tool_use_id: u.id,
