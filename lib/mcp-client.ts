@@ -31,6 +31,15 @@ declare global {
 }
 
 function spawnMcp(): Promise<McpHandle> {
+  // StdioClientTransport defaults to a small env allowlist (PATH, HOME, …)
+  // for security; without an explicit `env`, the child can't see custom
+  // vars like SUPABASE_LLM_READONLY_DB_URL or ANTHROPIC_API_KEY. Pass the
+  // parent process env through so the MCP server's pg pool can connect.
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === "string") childEnv[k] = v;
+  }
+
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [
@@ -38,9 +47,9 @@ function spawnMcp(): Promise<McpHandle> {
       "tsx",
       path.resolve(process.cwd(), "mcp-server/index.ts"),
     ],
-    // Child inherits parent env by default (so SUPABASE_LLM_READONLY_DB_URL
-    // flows through). `stderr: 'inherit'` means MCP server stderr lines
-    // appear directly in the Next.js dev console — no manual pipe needed.
+    env: childEnv,
+    // `stderr: 'inherit'` means MCP server stderr lines appear directly in
+    // the Next.js dev console — no manual pipe needed.
     stderr: "inherit",
   });
   const client = new Client(
