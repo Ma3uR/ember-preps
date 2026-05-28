@@ -1,10 +1,12 @@
 /**
- * Stage-1 chat endpoint. POST { question } -> { answer }.
+ * MCP-backed chat endpoint. POST { question } -> { answer, trace }.
  *
  * Runs the hand-rolled Anthropic tool-use loop against the singleton MCP
  * client (which spawns and shares one MCP server child for the lifetime of
  * the Next.js process). See u4 in
- * docs/plans/2026-05-27-001-feat-mcp-langchain-rebuild-prep-plan.md.
+ * docs/plans/2026-05-27-001-feat-mcp-langchain-rebuild-prep-plan.md and
+ * u2 in docs/plans/2026-05-28-001-feat-langchain-switch-and-perf-report-plan.md
+ * for the trace-shape extension.
  *
  * `runtime = "nodejs"` is non-optional — the MCP SDK uses `child_process`,
  * which isn't available on the Edge runtime.
@@ -40,8 +42,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const answer = await runMcpToolLoop(question.trim());
-    return NextResponse.json({ answer });
+    const { answer, trace } = await runMcpToolLoop(question.trim());
+    return NextResponse.json({ answer, trace });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     console.error("[chat-mcp] error:", err);

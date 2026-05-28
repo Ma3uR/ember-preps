@@ -25,6 +25,7 @@ import type {
   ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages";
 import { getMcpClient } from "./mcp-client";
+import { createTraceBuilder, type Trace } from "./trace";
 
 const MODEL = "claude-sonnet-4-6";
 const MAX_ITERATIONS = 6;
@@ -82,7 +83,10 @@ function lastAssistantText(messages: MessageParam[]): string {
   return "(no text generated — model only made tool calls)";
 }
 
-export async function runMcpToolLoop(question: string): Promise<string> {
+export async function runMcpToolLoop(
+  question: string
+): Promise<{ answer: string; trace: Trace }> {
+  const builder = createTraceBuilder({ backend: "mcp" });
   const client = await getMcpClient();
   const { tools: mcpTools } = await client.listTools();
 
@@ -102,12 +106,17 @@ export async function runMcpToolLoop(question: string): Promise<string> {
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     console.error(`[tool-loop] iter ${i + 1}/${MAX_ITERATIONS} → claude`);
+    const llmT0 = performance.now();
     const res = await ai.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: SYSTEM_PROMPT,
       tools,
       messages,
+    });
+    builder.markLlmCallFromAnthropic({
+      ms: performance.now() - llmT0,
+      usage: res.usage,
     });
 
     const toolUses = res.content.filter(
@@ -116,7 +125,10 @@ export async function runMcpToolLoop(question: string): Promise<string> {
 
     if (toolUses.length === 0) {
       console.error(`[tool-loop] iter ${i + 1} → terminal text response`);
-      return textOf(res.content);
+      return {
+        answer: textOf(res.content),
+        trace: builder.finalize({ iterations: i + 1 }),
+      };
     }
 
     const toolResults: ToolResultBlockParam[] = await Promise.all(
@@ -124,6 +136,7 @@ export async function runMcpToolLoop(question: string): Promise<string> {
         console.error(
           `[tool-loop]   tool: ${u.name}(${JSON.stringify(u.input)})`
         );
+        const toolT0 = performance.now();
         try {
           const result = await client.callTool({
             name: u.name,
@@ -141,6 +154,11 @@ export async function runMcpToolLoop(question: string): Promise<string> {
           if (result.isError) {
             console.error(`[tool-loop]   tool error: ${text}`);
           }
+          builder.markToolCall({
+            name: u.name,
+            ms: performance.now() - toolT0,
+            isError: result.isError === true,
+          });
           return {
             type: "tool_result" as const,
             tool_use_id: u.id,
@@ -151,6 +169,11 @@ export async function runMcpToolLoop(question: string): Promise<string> {
           const message =
             err instanceof Error ? err.message : String(err);
           console.error(`[tool-loop]   tool error: ${message}`);
+          builder.markToolCall({
+            name: u.name,
+            ms: performance.now() - toolT0,
+            isError: true,
+          });
           return {
             type: "tool_result" as const,
             tool_use_id: u.id,
@@ -166,5 +189,9 @@ export async function runMcpToolLoop(question: string): Promise<string> {
   }
 
   console.error(`[tool-loop] iteration cap reached`);
-  return `[Iteration cap reached after ${MAX_ITERATIONS} loops] ${lastAssistantText(messages)}`;
+  builder.markCapReached();
+  return {
+    answer: `[Iteration cap reached after ${MAX_ITERATIONS} loops] ${lastAssistantText(messages)}`,
+    trace: builder.finalize({ iterations: MAX_ITERATIONS }),
+  };
 }
