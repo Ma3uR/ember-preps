@@ -1,7 +1,7 @@
 ---
 title: LangChain Switch + UI Performance Comparison Report
 type: feat
-status: active
+status: completed
 date: 2026-05-28
 origin: docs/brainstorms/mcp-langchain-rebuild-prep-requirements.md
 predecessor: docs/plans/2026-05-27-001-feat-mcp-langchain-rebuild-prep-plan.md

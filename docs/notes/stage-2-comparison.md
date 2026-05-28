@@ -1,105 +1,117 @@
 # Stage-2 comparison — MCP vs LangChain.js v1
 
+## Bottom line
+
+For a single-app deployment of this kind (one consumer, one team, one
+deploy target), **LangChain v1 is the better default**. Half the code,
+no extra process to manage, real stack traces on tool errors, type-safe
+tool handlers. The cost: you give up the second-host portability that
+makes MCP architecturally interesting in the first place. For a multi-
+consumer tool surface (Claude Desktop + Cursor + your app), MCP is the
+better default. The two are *answering different questions*.
+
+Perf is a wash at this workload — LLM-call latency dominates everything
+else, and the architectural overhead doesn't show up in the trace. The
+runtime "is LangChain faster?" question is the wrong question; the
+interesting comparison is on the structural axes below.
+
 ## What I built
 
 Two backends, same database, same model, same three tools (`list_tables`,
 `describe_table`, `execute_query`). Stage 1 routes through an MCP child
 process and a hand-rolled Anthropic tool-use loop (`lib/tool-loop.ts`).
 Stage 2 wires the tools straight into a LangChain v1 `createAgent`
-(`lib/langchain-agent.ts`), reusing the same `runSql` / `runReadonlyQuery`
-helpers. Both endpoints return `{ answer, trace }`; the UI's Compare Mode
-fires them in parallel and renders side-by-side.
+(`lib/langchain-agent.ts`), reusing the same `runSql` /
+`runReadonlyQuery` helpers. Both endpoints return `{ answer, trace }`;
+the UI's Compare Mode fires them in parallel and renders side-by-side
+so the trace diff is visible on screen.
 
-## Code volume
+## Where LangChain wins
 
-Pure agent shape, instrumentation excluded:
+**1. Code volume — roughly half.** Pure agent shape, instrumentation
+excluded:
 
 | Path | Files | LOC |
 |------|-------|-----|
-| MCP | server/index + server/tools + mcp-client + tool-loop | ~458 |
+| MCP | server entry + server tools + mcp-client + tool-loop | ~458 |
 | LangChain | `lib/langchain-agent.ts` | ~250 |
 
-LangChain is roughly half the lines, but most of MCP's overhead is the
-**process boundary**: server entry, stdio framing, host singleton,
-discovery RPC. The tools doing the work are equivalent line-for-line.
+The LangChain delta isn't in the tools (those are line-for-line
+equivalent — both use zod schemas and the same `runSql` calls). It's the
+~200 LOC of *process plumbing* the MCP path forces: stdio framing, the
+host singleton with HMR-safe failed-promise-clear, the env passthrough
+to the child, the SIGINT/SIGTERM cleanup wiring. None of that exists in
+the LangChain path because it's all in-process.
 
-## Discoverability
+**2. One deployment artifact, not two.** The MCP path needs both
+`pnpm dev` AND a child `tsx mcp-server/index.ts` process spawned per
+host. The child has its own pg pool, its own heap, its own crash domain.
+LangChain runs in the Next.js server's existing isolate — no extra
+process, no extra pool, no extra thing to monitor in production.
 
-MCP gives `tools/list` at runtime — the host asks the server what tools
-exist. LangChain hard-codes the tool array at the `createAgent` call site.
-Adding a tool: server-side file edit (auto-discovered) vs agent-side file
-edit (requires the agent rebuild). Matters little for one app; matters a
-lot the moment a second consumer wants the same tools.
+**3. Real stack traces on tool errors.** LangChain tool errors come up
+the call stack with file:line provenance — you see exactly which line
+of `runSql` threw. MCP tool errors arrive as `{ isError: true, content:
+[{ type: "text", text: "Error: ..." }] }` — the original stack trace
+died inside the child process; the host sees only the stringified
+message. When a query fails, "constraint violation at supabase.ts:84"
+beats `"Error: constraint violation"` for debugging speed.
 
-## Error-handling shape
+**4. Type-safe tool handlers, end-to-end.** The LangChain `tool()` call
+infers the handler's args type from the zod schema, so `{ table_name }`
+is a typed string inside the body. The MCP host (`lib/tool-loop.ts:130`)
+has to cast `u.input as Record<string, unknown>` because it came over
+the wire — the type contract dies at the JSON-RPC boundary even though
+both sides know the schema. Small thing, real every-day cost.
 
-MCP tool errors come back as `{ isError: true, content: [{ type: "text",
-text: "Error: …" }] }` — error is a first-class data type. The host
-loop reads `isError` and pushes it into the next user turn. LangChain
-tool errors are **thrown exceptions**: middleware records them, the
-agent's internal handling surfaces messages into the model. Both
-converge in behaviour, but the shape difference matters for tracing —
-MCP's error is in the message stream; LangChain's lives in the stack.
+## Where MCP wins (and why I'd pick it back)
 
-## Vendor portability
+**1. Process-boundary isolation.** MCP child crash doesn't take down
+Next.js — `lib/mcp-client.ts:88-92` clears the cached promise and the
+next request respawns. The LangChain agent shares an isolate with the
+route; a top-level throw inside a tool propagates straight up the stack.
+For a tool that touches a flaky external API, that matters.
 
-MCP server is a process; any host (Claude Desktop, Cursor, custom Python
-harness) can spawn it. LangChain agent is a TypeScript module bound to
-the Next.js chat route. The SQL is portable; the agent isn't.
+**2. Runtime tool discovery.** Add a fourth tool to
+`mcp-server/tools.ts` and the host picks it up on the next request via
+`tools/list` — no agent change. The LangChain path requires editing the
+`tools: [...]` array at the `createAgent` site.
 
-## Performance — lived measurements
+**3. Host-agnostic transport.** Point Claude Desktop at
+`mcp-server/index.ts` and it works. Cursor too. Any MCP host. The
+LangChain agent only runs inside this Next.js app — a second consumer
+means a rewrite.
 
-10 paired questions, sequential per backend, via `scripts/compare-bench.ts`:
+Any one of these is enough to flip the decision. Two consumers wanting
+the same SQL tools? MCP. Tools that crash often and you want process
+isolation? MCP. Want a published tool surface that other people's agents
+can use? MCP.
 
-| # | Question | MCP ms | LC ms | iter (both) | Tools |
-|---|----------|-------:|------:|:-----------:|-------|
-| 1 | What can you answer? | 8769 | 10338 | 1 | — |
-| 2 | How many users? | 3597 | 5378 | 2 | execute_query |
-| 3 | Avg items/order? | 4494 | 4670 | 2 | execute_query |
-| 4 | Orders per status? | 5423 | 5071 | 2 | execute_query |
-| 5 | Top 5 products last 30d? | 7769 | 13598 | 2 | execute_query |
-| 6 | Columns + count of events? | 6622 | 6270 | 2 | describe + execute |
-| 7 | Signups last 90d? | 4187 | 4387 | 2 | execute_query |
-| 8 | Top category by revenue? | 4578 | 5217 | 2 | execute_query |
-| 9 | User with most orders? | **36403** | 5396 | 2 | execute_query |
-| 10 | List tables + count largest? | 10213 | 9700 | 3 | list + execute |
+## Performance — receipts for the "perf is a wash" claim
 
-Aggregates (totalMs):
+10 paired questions via `scripts/compare-bench.ts` (raw table in
+`scripts/compare-bench.ts` output; aggregates here):
 
-- **Mean, all 10:** MCP 9206 · LC 7003 → LC ~24% faster — but Q9's 36s
-  MCP outlier (same iter, same tool, identical token counts as LC) is an
-  Anthropic API latency spike, not the architecture.
-- **Mean excluding Q9 (N=9):** MCP 6184 · LC 6515 → LC ~5% **slower**.
-- **Median:** MCP 6022 · LC 5387 → LC ~11% faster.
-- **Input tokens:** identical (2526 avg both). The model sees the same
-  context. **Output tokens:** MCP 237 · LC 240. **Iterations & tool
-  sequence:** identical on every question (Q6 differs only in tool order
-  within the iteration).
+- **Median totalMs:** MCP 6022 · LC 5387 — within noise.
+- **Mean excluding one Anthropic API spike (Q9: 36s MCP / 5.4s LC, same
+  iter, same tool, same tokens — variance is in the provider, not the
+  agent):** MCP 6184 · LC 6515 — sign flipped, still within noise.
+- **Input tokens, iterations, tool sequence:** identical on every
+  question. Same model, same prompt, same trajectory.
 
-## Was it faster?
+LLM call latency (1.5–8s per call) is 50–100× larger than per-tool-call
+stdio cost (~40–80ms), so the architectural overhead never surfaces.
+At workloads with 10+ tool calls per question the MCP boundary would
+start to show; at chat-with-DB density it does not.
 
-**No, not meaningfully.** End-to-end wall time is dominated by the
-Anthropic API: per-LLM-call latencies of 1.5–8s in the trace dwarf the
-architectural overhead (MCP stdio round-trip ~50–80ms per tool call vs
-in-process function call ~5–10ms). Q9 is the smoking gun — same model
-trajectory, 7× spread in totalMs. The variance is in the provider, not
-in the agent. At higher tool-call density (10+ round-trips per question),
-the MCP boundary cost would start to show; at this regime it's noise.
+## What I'd say in the interview
 
-## Three things MCP gave me that LangChain didn't preserve
-
-1. **Process-boundary isolation.** MCP child crash doesn't take down
-   Next.js — `lib/mcp-client.ts:88-92` clears the cached promise and the
-   next request respawns. The LangChain agent shares an isolate with the
-   route; a top-level throw propagates up the stack.
-2. **Runtime tool discovery.** Add a fourth tool to `mcp-server/tools.ts`
-   and the host picks it up on the next request — no agent change. The
-   LangChain path requires editing the `tools: […]` array.
-3. **Host-agnostic transport.** I can point Claude Desktop at
-   `mcp-server/index.ts` directly. The LangChain agent only lives inside
-   this Next.js app — any second consumer means a port.
-
-These are the trade-offs of choosing LangChain v1: less code, in-process
-speed, one less moving part — at the cost of those three affordances.
-Worth it for one app. Worth revisiting the moment a second consumer
-wants the same tools.
+> *"They're answering different questions. LangChain v1 gave me half the
+> code, one deployment artifact, real stack traces, and type-safe tool
+> args — and that's what matters when one app owns one tool surface.
+> MCP gave up zero of those gracefully and added process isolation,
+> runtime discovery, and host portability — and that's what matters
+> the moment a second consumer wants the same tools. Perf was a wash at
+> this scale; the LLM call dwarfs everything else. The dimensions worth
+> arguing about aren't milliseconds, they're the operational cost of
+> the extra moving part vs the option value of swapping hosts."*
