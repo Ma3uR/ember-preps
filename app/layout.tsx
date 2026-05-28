@@ -14,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      {/* Browser extensions (grammarly, password managers, dark-reader) inject
+          attributes onto <body> after SSR — silence the hydration warning for
+          this single element so it doesn't fire on every page load. */}
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }
